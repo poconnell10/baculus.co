@@ -1,0 +1,20 @@
+# STUB (M0): future commit manifest digests to GitHub as a secondary tamper-evidence anchor workflow.
+#
+# Intentionally NOT scheduled. There is no `on: schedule:` here — M0 does not
+# activate any scheduled job. Manual dispatch only; performs no work. Documents
+# the intended shape for a later milestone.
+name: Audit anchor (stub — not scheduled)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: |
+          echo "Stub only. Audit anchor is deferred beyond M0."

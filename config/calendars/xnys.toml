@@ -1,0 +1,17 @@
+# Authoritative trading-calendar reference configuration.
+# The calendar is reference data; its version is pinned and recorded in every
+# dataset manifest. Never replace this with hand-rolled weekday/holiday logic.
+
+[calendar]
+name = "XNYS"                     # NYSE, per exchange_calendars
+provider = "exchange_calendars"
+# Pinned in pyproject.toml. This value documents the expected pin; the runtime
+# reads the actually-installed version via importlib.metadata.
+library_version = "4.13.2"
+timezone = "America/New_York"
+
+[staleness]
+# expected_bar_date is the trading session (event time).
+# expected_availability_time is source/SLA specific and computed as
+# session_close + availability_sla (see config/sources/*.toml).
+notes = "expected_bar_date != expected_availability_time; the latter is per-source."

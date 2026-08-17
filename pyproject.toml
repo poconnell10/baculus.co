@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "baculus-engine"
+version = "0.0.0"
+description = "Baculus M0 — point-in-time market-data ingestion, provenance and validation engine"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "UNLICENSED" }
+authors = [{ name = "Baculus" }]
+
+# Runtime dependencies. Versions are pinned deliberately: for a research
+# platform the toolchain (and especially the trading calendar) is *reference
+# data*, so upgrades must be intentional and auditable, never incidental.
+dependencies = [
+    "polars==1.43.2",
+    "pyarrow==25.0.1",
+    # The exchange calendar is authoritative reference data. Its version is
+    # recorded in every dataset manifest (see engine/baculus/reference).
+    "exchange-calendars==4.13.2",
+]
+
+[project.optional-dependencies]
+# The Supabase control plane is Postgres. These clients are only needed to
+# *apply* migrations or talk to a live control plane; the M0 proof runs
+# against the local SQLite mirror and does not require them.
+supabase = [
+    "psycopg[binary]==3.2.3",
+]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.3",
+    "mypy==2.3.1",
+]
+
+[tool.hatch.build.targets.wheel]
+# Import name is `baculus`; source lives under engine/.
+packages = ["engine/baculus"]
+
+# ---------------------------------------------------------------------------
+# Tooling
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["engine"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
+# B008: we never call functions in defaults; keep default set otherwise.
+
+[tool.ruff.lint.isort]
+known-first-party = ["baculus"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "engine"
+packages = ["baculus"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+strict_equality = true
+# Third-party libs without type stubs.
+[[tool.mypy.overrides]]
+module = ["exchange_calendars.*", "polars.*", "pyarrow.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+# Make `import baculus` work without an editable install.
+pythonpath = ["engine"]
+testpaths = ["engine/tests"]
+addopts = "-ra"
+filterwarnings = ["ignore::DeprecationWarning"]

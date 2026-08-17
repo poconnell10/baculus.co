@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://baculus.co/schemas/dataset_manifest.schema.json",
+  "title": "DatasetManifest",
+  "description": "Deterministic, canonically-serialized description of a dataset build. Its SHA-256 digest is the secondary tamper-evidence anchor.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_schema",
+    "source",
+    "dataset",
+    "logical_key",
+    "vintage",
+    "state",
+    "symbols",
+    "event_date_min",
+    "event_date_max",
+    "observation_time",
+    "raw_artifact",
+    "canonical",
+    "validation",
+    "reference_calendar"
+  ],
+  "properties": {
+    "manifest_schema": { "const": "baculus.dataset_manifest/1" },
+    "source": { "type": "string" },
+    "dataset": { "type": "string" },
+    "logical_key": { "type": "string" },
+    "vintage": { "type": "integer", "minimum": 1 },
+    "state": {
+      "type": "string",
+      "enum": ["RAW", "VALIDATED", "PROVISIONAL", "QUARANTINED", "SEALED", "SUPERSEDED"]
+    },
+    "symbols": { "type": "array", "items": { "type": "string" } },
+    "event_date_min": { "type": "string", "format": "date" },
+    "event_date_max": { "type": "string", "format": "date" },
+    "observation_time": { "type": "string", "format": "date-time" },
+    "raw_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "object_path", "byte_size", "row_count", "fetch_mode"],
+      "properties": {
+        "sha256": { "type": "string" },
+        "object_path": { "type": "string" },
+        "byte_size": { "type": "integer", "minimum": 0 },
+        "row_count": { "type": ["integer", "null"] },
+        "fetch_mode": { "type": "string", "enum": ["live", "fixture"] }
+      }
+    },
+    "canonical": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "row_count", "columns"],
+      "properties": {
+        "schema_version": { "type": "string" },
+        "row_count": { "type": "integer", "minimum": 0 },
+        "columns": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "validation": { "type": "object" },
+    "reference_calendar": { "type": "object" }
+  }
+}

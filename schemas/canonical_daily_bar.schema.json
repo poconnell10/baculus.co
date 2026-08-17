@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://baculus.co/schemas/canonical_daily_bar.schema.json",
+  "title": "CanonicalDailyBar",
+  "description": "Vendor-neutral daily OHLCV bar. Schema version 1.0.0.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "symbol",
+    "event_date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "source",
+    "observation_time",
+    "source_artifact_id"
+  ],
+  "properties": {
+    "symbol": { "type": "string", "minLength": 1 },
+    "event_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Event time: the trading session the bar belongs to."
+    },
+    "open": { "type": "number" },
+    "high": { "type": "number" },
+    "low": { "type": "number" },
+    "close": { "type": "number" },
+    "volume": { "type": "integer", "minimum": 0 },
+    "source": { "type": "string", "minLength": 1 },
+    "observation_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Observation time: when Baculus received this version from the vendor."
+    },
+    "source_artifact_id": {
+      "type": "string",
+      "description": "SHA-256 of the raw vendor artifact this bar was derived from."
+    }
+  }
+}

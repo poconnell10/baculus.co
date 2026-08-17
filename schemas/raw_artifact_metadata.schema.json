@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://baculus.co/schemas/raw_artifact_metadata.schema.json",
+  "title": "RawArtifactMetadata",
+  "description": "Provenance metadata stored for every raw vendor artifact. The artifact body itself lives in object storage, never in Postgres.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source",
+    "source_dataset",
+    "observation_time",
+    "event_date_min",
+    "event_date_max",
+    "object_path",
+    "sha256",
+    "byte_size",
+    "ingestion_run_id",
+    "request_parameters",
+    "schema_version",
+    "fetch_mode"
+  ],
+  "properties": {
+    "source": { "type": "string" },
+    "source_dataset": { "type": "string" },
+    "observation_time": { "type": "string", "format": "date-time" },
+    "event_date_min": { "type": "string", "format": "date" },
+    "event_date_max": { "type": "string", "format": "date" },
+    "object_path": { "type": "string" },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "byte_size": { "type": "integer", "minimum": 0 },
+    "row_count": { "type": ["integer", "null"] },
+    "ingestion_run_id": { "type": "string" },
+    "request_parameters": { "type": "object" },
+    "vendor_metadata": { "type": "object" },
+    "schema_version": { "type": "string" },
+    "logical_key": { "type": "string" },
+    "vintage": { "type": "integer", "minimum": 1 },
+    "fetch_mode": { "type": "string", "enum": ["live", "fixture"] }
+  }
+}

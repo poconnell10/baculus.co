@@ -1,0 +1,53 @@
+# Deterministic M0 validation rule catalog (documentation mirror of
+# engine/baculus/validation/rules.py). Rule ids and versions are stable so
+# findings can be tied to the exact rule revision that produced them.
+
+ruleset_version = "1.0.0"
+
+[[rule]]
+id = "MD001"
+name = "malformed_record"
+severity = "ERROR"
+description = "Record could not be parsed into a canonical bar."
+
+[[rule]]
+id = "MD002"
+name = "null_required_field"
+severity = "ERROR"
+description = "A required field is null."
+
+[[rule]]
+id = "MD003"
+name = "duplicate_symbol_date"
+severity = "ERROR"
+description = "More than one bar for the same symbol and event date."
+
+[[rule]]
+id = "MD004"
+name = "impossible_ohlc"
+severity = "ERROR"
+description = "OHLC values violate high>=max(open,close)>=min(open,close)>=low, high>=low."
+
+[[rule]]
+id = "MD005"
+name = "negative_volume"
+severity = "ERROR"
+description = "Volume is negative."
+
+[[rule]]
+id = "MD006"
+name = "missing_trading_date"
+severity = "WARNING"
+description = "An expected trading session has no bar for a symbol."
+
+[[rule]]
+id = "MD007"
+name = "duplicate_source_observation"
+severity = "ERROR"
+description = "Same source/artifact reported the same symbol/date more than once."
+
+[[rule]]
+id = "MD008"
+name = "schema_mismatch"
+severity = "ERROR"
+description = "Dataset frame does not match the canonical bar schema."

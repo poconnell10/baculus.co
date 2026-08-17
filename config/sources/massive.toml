@@ -1,0 +1,29 @@
+# Massive market-data source configuration (non-secret).
+# The API key is NEVER stored here; it comes from the MASSIVE_API_KEY env var.
+
+[source]
+id = "massive"
+name = "Massive"
+kind = "market_data_vendor"
+# Massive-only data can never be SEALED; it requires an independent M4 pass.
+authoritative = false
+
+[source.api]
+# Base URL may be overridden by the MASSIVE_BASE_URL env var.
+base_url = "https://api.massive.example/v1"
+api_key_env = "MASSIVE_API_KEY"
+
+[[dataset]]
+id = "stocks/daily"
+description = "Daily U.S. equity OHLCV bars (unadjusted)."
+adjusted = false
+raw_extension = "json"
+# Source/SLA-specific availability offset after the session close, used for
+# staleness reasoning (expected_availability_time). ~90 minutes after close.
+availability_sla_minutes = 90
+
+[proof_cohort]
+# M0 proof cohort — infrastructure proof only, not investment coverage.
+symbols = ["SPY", "XLK", "XLE"]
+start = "2024-01-01"
+end = "2024-03-31"

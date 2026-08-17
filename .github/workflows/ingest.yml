@@ -1,0 +1,23 @@
+# STUB (M0): future scheduled ingestion workflow.
+#
+# Intentionally NOT scheduled. There is no `on: schedule:` here — M0 does not
+# activate any scheduled market-data job. This stub only runs on manual dispatch
+# and performs no ingestion; it documents the intended shape for a later
+# milestone. Secrets (MASSIVE_API_KEY, SUPABASE_*) would be provided via GitHub
+# Actions secrets, never committed.
+name: Ingest (stub — not scheduled)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: |
+          echo "Stub only. Scheduled ingestion is deferred beyond M0."
+          echo "No market-data job is activated in this milestone."
