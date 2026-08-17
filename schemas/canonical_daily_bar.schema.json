@@ -24,10 +24,10 @@
       "format": "date",
       "description": "Event time: the trading session the bar belongs to."
     },
-    "open": { "type": "number" },
-    "high": { "type": "number" },
-    "low": { "type": "number" },
-    "close": { "type": "number" },
+    "open": { "$ref": "#/$defs/decimalPrice" },
+    "high": { "$ref": "#/$defs/decimalPrice" },
+    "low": { "$ref": "#/$defs/decimalPrice" },
+    "close": { "$ref": "#/$defs/decimalPrice" },
     "volume": { "type": "integer", "minimum": 0 },
     "source": { "type": "string", "minLength": 1 },
     "observation_time": {
@@ -38,6 +38,13 @@
     "source_artifact_id": {
       "type": "string",
       "description": "SHA-256 of the raw vendor artifact this bar was derived from."
+    }
+  },
+  "$defs": {
+    "decimalPrice": {
+      "description": "Fixed-precision decimal price (Decimal(18,8)); serialized as a normalized decimal string, never binary float. See ADR-0008.",
+      "type": "string",
+      "pattern": "^-?[0-9]+(\\.[0-9]{1,8})?$"
     }
   }
 }

@@ -1,9 +1,10 @@
 """Governance control plane: metadata store, dataset state machine, guards.
 
-Postgres (Supabase) is the production control plane; this package also ships a
-SQLite mirror with equivalent schema and append-only triggers so the governance
-invariants are executable and testable without a live database. The Postgres
-DDL under ``supabase/migrations`` mirrors ``schema_sqlite.sql``.
+The control plane is a single implementation: Supabase Postgres, defined by
+``supabase/migrations`` and reached via psycopg. There is one schema and one
+enforcement model (append-only triggers, SEALED guard). Dev, CI and tests all
+run against a real Postgres (containerized locally, a Postgres service in CI,
+Supabase for the hosted POC).
 """
 
 from __future__ import annotations

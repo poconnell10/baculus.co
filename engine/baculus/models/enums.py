@@ -48,11 +48,16 @@ class FindingSeverity(StrEnum):
 
 
 class GovernanceEventType(StrEnum):
-    """Categories of governance events written to the append-only ledger."""
+    """Categories of governance events written to the append-only ledger.
+
+    Governance is deliberately high-signal: restatement, quarantine, validation
+    outcomes, state transitions, seal attempts, supersession. Routine
+    operational activity (e.g. an identical refetch) is recorded as an
+    ``audit_event`` instead, never here.
+    """
 
     INGESTION_STARTED = "INGESTION_STARTED"
     RAW_ARTIFACT_STORED = "RAW_ARTIFACT_STORED"
-    IDENTICAL_REFETCH = "IDENTICAL_REFETCH"
     NEW_VINTAGE_CREATED = "NEW_VINTAGE_CREATED"
     RESTATEMENT_DETECTED = "RESTATEMENT_DETECTED"
     VALIDATION_COMPLETED = "VALIDATION_COMPLETED"

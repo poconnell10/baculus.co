@@ -15,6 +15,25 @@ jobs:
   engine:
     name: Engine (lint, format, types, tests)
     runs-on: ubuntu-latest
+    # The control plane is Postgres — tests and the M0 proof run against a real
+    # Postgres service, not any in-memory mirror.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: baculus
+          POSTGRES_PASSWORD: baculus
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U baculus"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      BACULUS_TEST_ADMIN_URL: postgresql://baculus:baculus@localhost:5432/postgres
+      BACULUS_PROOF_ADMIN_URL: postgresql://baculus:baculus@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
 
@@ -37,10 +56,10 @@ jobs:
       - name: Type check (mypy)
         run: mypy
 
-      - name: Tests (pytest)
+      - name: Tests (pytest, against Postgres)
         run: pytest -q
 
-      - name: M0 evidence smoke (fixtures)
+      - name: M0 evidence smoke (fixtures, against Postgres)
         run: python scripts/prove_m0.py --out m0_proof.json
 
       - name: Secret scan

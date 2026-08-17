@@ -17,9 +17,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 import polars as pl
+
+# --- Decimal price policy ---------------------------------------------------
+# Prices are NEVER stored as binary floating point at the canonical/persisted
+# boundary. Money is fixed-precision decimal. This policy is deliberately
+# generous so that reconstructing decades of split/dividend adjustments does not
+# accumulate rounding error. See docs/decisions/ADR-0008-decimal-price-policy.md.
+PRICE_DECIMAL_PRECISION = 18  # total significant digits
+PRICE_DECIMAL_SCALE = 8  # fractional digits (1e-8 minimum tick representable)
+PRICE_DTYPE = pl.Decimal(precision=PRICE_DECIMAL_PRECISION, scale=PRICE_DECIMAL_SCALE)
 
 # Intentional Polars schema for the canonical daily bar. Used with strict frame
 # construction so that a type mismatch surfaces as an error rather than a silent
@@ -28,10 +38,10 @@ import polars as pl
 CANONICAL_BAR_SCHEMA: dict[str, Any] = {
     "symbol": pl.Utf8,
     "event_date": pl.Date,
-    "open": pl.Float64,
-    "high": pl.Float64,
-    "low": pl.Float64,
-    "close": pl.Float64,
+    "open": PRICE_DTYPE,
+    "high": PRICE_DTYPE,
+    "low": PRICE_DTYPE,
+    "close": PRICE_DTYPE,
     "volume": pl.Int64,
     "source": pl.Utf8,
     "observation_time": pl.Datetime(time_unit="us", time_zone="UTC"),
@@ -60,16 +70,16 @@ OHLC_FIELDS: tuple[str, ...] = ("open", "high", "low", "close")
 class CanonicalDailyBar:
     """A single vendor-neutral daily OHLCV bar.
 
-    Prices are decimals-as-float for the POC; a future milestone may move to a
-    fixed-point/decimal representation. Volume is an integer count of shares.
+    Prices are ``Decimal`` (fixed precision) — never binary float — at the
+    canonical boundary. Volume is an integer count of shares.
     """
 
     symbol: str
     event_date: date
-    open: float
-    high: float
-    low: float
-    close: float
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
     volume: int
     source: str
     observation_time: datetime
@@ -94,6 +104,9 @@ class CanonicalDailyBar:
 __all__ = [
     "CANONICAL_BAR_SCHEMA",
     "OHLC_FIELDS",
+    "PRICE_DECIMAL_PRECISION",
+    "PRICE_DECIMAL_SCALE",
+    "PRICE_DTYPE",
     "REQUIRED_BAR_FIELDS",
     "CanonicalDailyBar",
 ]

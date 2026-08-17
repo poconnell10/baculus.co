@@ -19,7 +19,6 @@ The runner makes no strategy decisions and does not decide source authority.
 from __future__ import annotations
 
 import io
-import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -184,7 +183,7 @@ class IngestionRunner:
         artifact: VendorArtifact,
         lkey: str,
         run_id: str,
-        existing: sqlite3.Row,
+        existing: dict[str, Any],
         object_path: str,
         events: list[str],
     ) -> IngestionResult:
@@ -198,19 +197,23 @@ class IngestionRunner:
             observation_time=artifact.retrieved_at,
             is_new_content=False,
         )
-        self._store.record_governance_event(
-            event_type=GovernanceEventType.IDENTICAL_REFETCH,
+        # An identical refetch is routine daily operation, not a governance
+        # event. It is recorded as operational/audit evidence (the observation
+        # above is already persisted) so the governance ledger stays high-signal
+        # (restatement, quarantine, seal attempts, supersession, ...).
+        self._store.record_audit_event(
+            actor="ingestion_runner",
+            action="identical_refetch",
             subject_type="raw_artifact",
             subject_id=artifact.sha256,
-            run_id=run_id,
             payload={
                 "logical_key": lkey,
                 "sha256": artifact.sha256,
                 "vintage": vintage,
+                "run_id": run_id,
                 "note": "identical bytes re-observed; no new market-data content created",
             },
         )
-        events.append(GovernanceEventType.IDENTICAL_REFETCH.value)
 
         build = self._store.get_dataset_build_by_key(lkey, vintage)
         state = DatasetState(build["state"]) if build is not None else None
@@ -254,8 +257,8 @@ class IngestionRunner:
             byte_size=artifact.byte_size,
             content_type=artifact.content_type,
             file_extension=artifact.file_extension,
-            event_date_min=artifact.event_date_min.isoformat(),
-            event_date_max=artifact.event_date_max.isoformat(),
+            event_date_min=artifact.event_date_min,
+            event_date_max=artifact.event_date_max,
             row_count=artifact.row_count,
             schema_version=CANONICAL_SCHEMA_VERSION,
             logical_key_value=lkey,
@@ -368,7 +371,7 @@ class IngestionRunner:
                 source=f.source,
                 artifact_id=f.artifact_id,
                 symbol=f.symbol,
-                event_date=f.event_date.isoformat() if f.event_date else None,
+                event_date=f.event_date,
                 observed_value=f.observed_value,
                 reason=f.reason,
             )

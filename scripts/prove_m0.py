@@ -23,22 +23,30 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 from datetime import UTC, date, datetime
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 # Allow running from a source checkout without installation.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine"))
 
+import psycopg
+
 from baculus.adapters.base import SourceRequest
 from baculus.adapters.massive import MassiveAdapter
+from baculus.governance.migrations import apply_migrations
 from baculus.governance.state_machine import ReconciliationEvidence
 from baculus.governance.store import GovernanceStore
 from baculus.ingestion.runner import IngestionRunner
 from baculus.models.enums import GovernanceEventType
 from baculus.reference.calendar import TradingCalendar
 from baculus.storage.object_store import LocalObjectStore
+
+_DEFAULT_ADMIN_URL = "postgresql://baculus:baculus@localhost:5432/postgres"
+_PROOF_DB = "baculus_proof"
 
 FIXED_OBSERVATION = datetime(2024, 4, 1, 12, 0, 0, tzinfo=UTC)
 PROOF_REQUEST = SourceRequest(
@@ -53,11 +61,25 @@ def _count(store: GovernanceStore, table: str) -> int:
     return store.connection.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
 
 
-def run_proof(data_root: Path) -> dict:
+def _with_database(url: str, db_name: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(path=f"/{db_name}"))
+
+
+def _provision_proof_db(admin_url: str) -> str:
+    with psycopg.connect(admin_url, autocommit=True) as admin:
+        admin.execute(f'DROP DATABASE IF EXISTS "{_PROOF_DB}" WITH (FORCE)')
+        admin.execute(f'CREATE DATABASE "{_PROOF_DB}"')
+    dsn = _with_database(admin_url, _PROOF_DB)
+    apply_migrations(dsn)
+    return dsn
+
+
+def run_proof(data_root: Path, dsn: str) -> dict:
     clock = lambda: FIXED_OBSERVATION  # noqa: E731 (fixed clock for reproducibility)
     calendar = TradingCalendar("XNYS")
     object_store = LocalObjectStore(data_root / "objects")
-    store = GovernanceStore(str(data_root / "control_plane.sqlite"), clock=clock)
+    store = GovernanceStore(dsn, clock=clock)
 
     def runner(overrides=None) -> IngestionRunner:
         adapter = MassiveAdapter(calendar=calendar, clock=clock, fixture_overrides=overrides)
@@ -67,8 +89,11 @@ def run_proof(data_root: Path) -> dict:
 
     # 1) First ingestion.
     v1 = runner().ingest(PROOF_REQUEST)
-    # 2) Identical refetch.
+    # 2) Identical refetch (routine operation: audited, NOT a governance event).
+    governance_before_refetch = len(store.governance_events())
     refetch = runner().ingest(PROOF_REQUEST)
+    governance_after_refetch = len(store.governance_events())
+    refetch_audit_events = len(store.audit_events(action="identical_refetch"))
     artifacts_after_refetch = _count(store, "raw_artifacts")
     # 3) Restatement (a valid changed value for one historical session).
     v2 = runner(overrides={("SPY", "2024-01-02"): {"v": 7_777_777}}).ingest(PROOF_REQUEST)
@@ -115,6 +140,8 @@ def run_proof(data_root: Path) -> dict:
             "raw_artifacts_after": artifacts_after_refetch,
             "ingestion_runs": _count(store, "ingestion_runs"),
             "raw_observations": _count(store, "raw_observations"),
+            "governance_events_added": governance_after_refetch - governance_before_refetch,
+            "operational_audit_events": refetch_audit_events,
         },
         "vintage_2_restatement": {
             "sha256": v2.sha256,
@@ -140,6 +167,9 @@ def run_proof(data_root: Path) -> dict:
             "original_vintage_preserved": original_retrievable and v1.object_path != v2.object_path,
             "restatement_recorded": len(restatement_events) == 1,
             "single_source_cannot_be_sealed": (not seal_no_m4) and (not seal_massive_only),
+            "identical_refetch_is_operational_not_governance": (
+                governance_after_refetch == governance_before_refetch and refetch_audit_events == 1
+            ),
         },
     }
 
@@ -151,14 +181,20 @@ def main() -> int:
         "--data-root",
         type=Path,
         default=None,
-        help="Directory for the object store + control plane (default: a temp dir).",
+        help="Directory for the object store (default: a temp dir).",
+    )
+    parser.add_argument(
+        "--admin-url",
+        default=os.environ.get("BACULUS_PROOF_ADMIN_URL", _DEFAULT_ADMIN_URL),
+        help="Postgres maintenance DSN used to (re)create the proof database.",
     )
     args = parser.parse_args()
 
     data_root = args.data_root or Path(tempfile.mkdtemp(prefix="baculus_m0_"))
     data_root.mkdir(parents=True, exist_ok=True)
 
-    evidence = run_proof(data_root)
+    dsn = _provision_proof_db(args.admin_url)
+    evidence = run_proof(data_root, dsn)
     text = json.dumps(evidence, indent=2, sort_keys=True)
 
     if args.out is not None:

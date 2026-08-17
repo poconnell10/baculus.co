@@ -47,7 +47,22 @@ def test_identical_ingestion_creates_no_duplicate_artifact(make_runner, proof_re
     obs = store.connection.execute("SELECT COUNT(*) AS c FROM raw_observations").fetchone()["c"]
     assert runs == 2
     assert obs == 2
-    assert GovernanceEventType.IDENTICAL_REFETCH.value in second.governance_event_types
+
+
+def test_identical_refetch_is_operational_not_governance(make_runner, proof_request, store):
+    """Identical refetch is audit/operational evidence, not a governance event."""
+    runner = make_runner()
+    runner.ingest(proof_request)
+    governance_before = len(store.governance_events())
+    second = runner.ingest(proof_request)
+
+    # No governance event was raised by the identical refetch...
+    assert second.governance_event_types == []
+    assert len(store.governance_events()) == governance_before
+    # ...but it IS recorded as an operational audit event.
+    refetch_audits = store.audit_events(action="identical_refetch")
+    assert len(refetch_audits) == 1
+    assert refetch_audits[0]["subject_id"] == second.sha256
 
 
 def test_changed_history_creates_new_vintage(make_runner, proof_request, store):

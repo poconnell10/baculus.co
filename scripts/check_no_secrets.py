@@ -47,7 +47,17 @@ _PRIVATE_KEY = re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")
 
 # Values in .env.example are allowed to be non-empty ONLY if they are obvious
 # non-secret local defaults.
-_ALLOWED_EXAMPLE_VALUES = {"./_data", "./_data/control_plane.sqlite", "fixture"}
+_ALLOWED_EXAMPLE_VALUES = {"./_data", "fixture"}
+
+
+def _is_placeholder(value: str) -> bool:
+    """Whether an assignment value is an obvious doc placeholder, not a secret."""
+    v = value.strip().strip("\"'")
+    if not v:
+        return True
+    if "..." in v:
+        return True
+    return v[:1] in {"<", "$", "{"} or v.lower().startswith(("your", "xxx", "changeme"))
 
 
 def _iter_files() -> list[Path]:
@@ -84,6 +94,8 @@ def scan() -> list[str]:
                 value = m.group("val").strip()
                 if is_example and value in _ALLOWED_EXAMPLE_VALUES:
                     continue
+                if _is_placeholder(value):
+                    continue  # doc/example placeholder, not a real secret
                 if not is_example or value:
                     problems.append(f"{rel}:{lineno}: {m.group(1)} assigned a value")
             if _PRIVATE_KEY.search(line):

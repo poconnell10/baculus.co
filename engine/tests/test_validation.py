@@ -13,6 +13,7 @@ Covers required tests:
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 import polars as pl
 import pytest
@@ -30,14 +31,18 @@ from baculus.validation.validator import Validator
 _OBS = datetime(2024, 4, 1, 12, 0, 0, tzinfo=UTC)
 
 
+def _d(x) -> Decimal:
+    return Decimal(str(x))
+
+
 def _bar(symbol: str, day: date, o=10.0, h=11.0, low=9.0, c=10.5, v=1000) -> CanonicalDailyBar:
     return CanonicalDailyBar(
         symbol=symbol,
         event_date=day,
-        open=o,
-        high=h,
-        low=low,
-        close=c,
+        open=_d(o),
+        high=_d(h),
+        low=_d(low),
+        close=_d(c),
         volume=v,
         source="massive",
         observation_time=_OBS,

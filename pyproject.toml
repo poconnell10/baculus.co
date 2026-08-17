@@ -20,15 +20,12 @@ dependencies = [
     # The exchange calendar is authoritative reference data. Its version is
     # recorded in every dataset manifest (see engine/baculus/reference).
     "exchange-calendars==4.13.2",
+    # The control plane IS Postgres (Supabase). There is a single control-plane
+    # implementation and enforcement model; psycopg is therefore a core dep.
+    "psycopg[binary]==3.2.3",
 ]
 
 [project.optional-dependencies]
-# The Supabase control plane is Postgres. These clients are only needed to
-# *apply* migrations or talk to a live control plane; the M0 proof runs
-# against the local SQLite mirror and does not require them.
-supabase = [
-    "psycopg[binary]==3.2.3",
-]
 dev = [
     "pytest==9.1.1",
     "ruff==0.16.3",

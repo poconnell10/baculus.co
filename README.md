@@ -56,22 +56,34 @@ engine/            Python engine (import name: baculus)
   tests/
 config/            sources / calendars / validation configuration
 schemas/           JSON Schemas for canonical artifacts
-supabase/migrations/  Postgres control-plane DDL (mirrors the SQLite dev store)
+supabase/migrations/  Postgres control-plane DDL (the single control-plane schema)
 scripts/           prove_m0.py end-to-end evidence generator
 docs/              architecture/, decisions/ (ADRs), evidence/
 ```
 
 ## Quickstart
 
+The control plane is Postgres — there is no SQLite fallback. You need a Postgres
+the test role can create/drop databases from (a local container is fine):
+
 ```bash
+docker run -d --name baculus-pg -p 5432:5432 \
+  -e POSTGRES_USER=baculus -e POSTGRES_PASSWORD=baculus -e POSTGRES_DB=postgres \
+  postgres:16
+export BACULUS_TEST_ADMIN_URL=postgresql://baculus:baculus@localhost:5432/postgres
+export BACULUS_PROOF_ADMIN_URL=$BACULUS_TEST_ADMIN_URL
+
 uv venv --python 3.12 .venv && source .venv/bin/activate
 uv pip install -e '.[dev]'
 
-# Run the full M0 test cohort
+# Run the full M0 test cohort (against real Postgres)
 pytest
 
-# Generate end-to-end M0 evidence (fixtures; no vendor/network access needed)
+# Generate end-to-end M0 evidence (fixtures; no vendor access needed)
 python scripts/prove_m0.py --out docs/evidence/m0_proof.json
+
+# Verify the LIVE stack (requires MASSIVE_API_KEY, optional Supabase env)
+python scripts/verify_live.py --out docs/evidence/live_proof.json
 ```
 
 Configuration comes from environment variables; copy `.env.example` to `.env`.

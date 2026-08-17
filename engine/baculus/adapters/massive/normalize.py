@@ -11,10 +11,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from baculus.adapters.base import VendorArtifact
-from baculus.models.bar import CanonicalDailyBar
+from baculus.models.bar import PRICE_DECIMAL_SCALE, CanonicalDailyBar
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,13 +34,35 @@ class MassiveParseError(Exception):
         super().__init__(f"malformed Massive payload: {detail}{more}")
 
 
-def _require_number(value: Any) -> float | None:
+_QUANTUM = Decimal(1).scaleb(-PRICE_DECIMAL_SCALE)
+
+
+def _require_price(value: Any) -> Decimal | None:
+    """Return an exact fixed-scale Decimal price, or None if unrepresentable.
+
+    Prices are parsed from the vendor's textual number (via ``parse_float=
+    Decimal``), so no binary-float imprecision is introduced. Values with more
+    fractional digits than the fixed scale are rejected (fail closed) rather
+    than silently rounded — money is never quietly altered.
+    """
     # bool is a subclass of int — reject it explicitly.
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
+    if isinstance(value, Decimal):
+        d = value
+    elif isinstance(value, int):
+        d = Decimal(value)
+    else:
+        return None
+    exponent = d.as_tuple().exponent
+    if not isinstance(exponent, int):  # NaN/Inf sentinels
+        return None
+    if -exponent > PRICE_DECIMAL_SCALE:
+        return None  # over-precision: reject rather than round
+    try:
+        return d.quantize(_QUANTUM)
+    except InvalidOperation:
+        return None
 
 
 def _require_int(value: Any) -> int | None:
@@ -56,7 +79,9 @@ def massive_payload_to_bars(artifact: VendorArtifact) -> list[CanonicalDailyBar]
     Raises ``MassiveParseError`` listing every row that could not be parsed.
     """
     try:
-        doc = json.loads(artifact.payload.decode("utf-8"))
+        # parse_float=Decimal preserves the vendor's exact textual number, so
+        # prices never pass through binary floating point.
+        doc = json.loads(artifact.payload.decode("utf-8"), parse_float=Decimal)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise MassiveParseError(
             [RowError(index=-1, reason=f"payload not valid JSON: {exc}")]
@@ -75,10 +100,10 @@ def massive_payload_to_bars(artifact: VendorArtifact) -> list[CanonicalDailyBar]
 
         symbol = row.get("T")
         ts = row.get("t")
-        o = _require_number(row.get("o"))
-        h = _require_number(row.get("h"))
-        low = _require_number(row.get("l"))
-        c = _require_number(row.get("c"))
+        o = _require_price(row.get("o"))
+        h = _require_price(row.get("h"))
+        low = _require_price(row.get("l"))
+        c = _require_price(row.get("c"))
         v = _require_int(row.get("v"))
 
         problems: list[str] = []
