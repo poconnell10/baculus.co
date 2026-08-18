@@ -2,32 +2,34 @@
 """Real-stack M0 infrastructure proof (Proof 4): fixture vendor, REAL storage +
 REAL Postgres control plane.
 
-This is the driver for M0 closure Proof 4. It runs the existing proof cohort
-(SPY/XLK/XLE, 2024-01-01..2024-03-31) with:
+Driver for M0 closure Proof 4. Runs the existing proof cohort (SPY/XLK/XLE,
+2024-01-01..2024-03-31) with:
 
   * vendor side = deterministic Massive-format FIXTURES (no live Massive call),
-  * raw storage = the env-selected object store (set BACULUS_OBJECT_STORE=supabase
+  * raw storage = the env-selected object store (BACULUS_OBJECT_STORE=supabase
     for real Supabase Storage),
   * control/provenance = the real Postgres given by --admin-url,
   * validation = the actual Baculus validator,
 
-and proves the full flow lands at PROVISIONAL, that an identical rerun creates no
+and proves the flow lands at PROVISIONAL, that an identical rerun creates no
 duplicate raw content and no governance restatement, and that changed historical
-bytes create a new vintage (original preserved) plus a restatement governance
-event.
+bytes create a new vintage (original preserved) plus a restatement event.
+
+NON-DESTRUCTIVE BY DESIGN. This script NEVER truncates or deletes. Each run is
+fully isolated under a unique ``proof_run_id`` that namespaces the dataset (and
+therefore the object-store paths and the vintaging logical key), so re-runs never
+collide and never touch prior or unrelated data. The append-only governance/audit
+rows a run writes persist permanently — that is the point of append-only, and it
+is why "delete only my rows" is deliberately NOT attempted here.
 
 It NEVER calls live Massive and NEVER claims live-vendor evidence: the emitted
 mode is "INFRA" and the vendor side is labelled "fixture".
 
-Usage (on the Mac, with .env loaded and Supabase migrated via `supabase db push`):
+Usage (Mac, with .env loaded and Supabase migrated via `supabase db push`):
     set -a && source .env && set +a
     export BACULUS_OBJECT_STORE=supabase
-    python scripts/verify_infra.py \
-        --admin-url "postgresql://<supabase session pooler DSN>" \
+    python scripts/verify_infra.py --admin-url "$DATABASE_URL" \
         --out docs/evidence/m0_infra_proof.json
-
-Re-running against the same DB requires --reset (truncates baculus.* first) or a
-fresh --run-tag, because raw_artifacts is unique on (logical_key, vintage).
 """
 
 from __future__ import annotations
@@ -36,12 +38,11 @@ import argparse
 import json
 import os
 import sys
+import uuid
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "engine"))
-
-import psycopg
 
 from baculus.adapters.base import SourceRequest
 from baculus.adapters.massive import MassiveAdapter
@@ -54,59 +55,35 @@ from baculus.reference.calendar import TradingCalendar
 from baculus.storage import object_store_from_env
 
 FIXED_OBSERVATION = datetime(2024, 4, 1, 12, 0, 0, tzinfo=UTC)
-_BACULUS_TABLES = [
-    "governance_events",
-    "audit_events",
-    "quarantine_decisions",
-    "quarantine_cases",
-    "validation_findings",
-    "validation_runs",
-    "dataset_artifacts",
-    "dataset_builds",
-    "reconciliations",
-    "raw_observations",
-    "raw_artifacts",
-    "reference_data_versions",
-    "ingestion_runs",
-    "source_datasets",
-    "sources",
-]
 
 
-def _cohort(run_tag: str) -> SourceRequest:
-    dataset = "stocks/daily" if not run_tag else f"stocks/daily/{run_tag}"
+def _cohort(proof_run_id: str) -> SourceRequest:
+    # The proof_run_id namespaces the dataset so every run is isolated: distinct
+    # logical key (no unique-vintage collision) and distinct object-store paths.
     return SourceRequest(
-        dataset=dataset,
+        dataset=f"stocks/daily/proof-{proof_run_id}",
         symbols=("SPY", "XLK", "XLE"),
         start=date(2024, 1, 1),
         end=date(2024, 3, 31),
     )
 
 
-def _reset(dsn: str) -> None:
-    with psycopg.connect(dsn, autocommit=True) as conn:
-        conn.execute("SET search_path TO baculus, public")
-        present = {
-            r[0]
-            for r in conn.execute(
-                "SELECT tablename FROM pg_tables WHERE schemaname = 'baculus'"
-            ).fetchall()
-        }
-        targets = [t for t in _BACULUS_TABLES if t in present]
-        if targets:
-            cols = ", ".join(f'baculus."{t}"' for t in targets)
-            conn.execute(f"TRUNCATE {cols} RESTART IDENTITY CASCADE")
-
-
-def run(dsn: str, *, run_tag: str) -> dict:
+def run(dsn: str, *, proof_run_id: str) -> dict:
     clock = lambda: FIXED_OBSERVATION  # noqa: E731 (fixed clock for reproducibility)
     calendar = TradingCalendar("XNYS")
     object_store = object_store_from_env()
     store = GovernanceStore(dsn, clock=clock)
-    request = _cohort(run_tag)
+    request = _cohort(proof_run_id)
 
     def runner(overrides=None) -> IngestionRunner:
-        adapter = MassiveAdapter(calendar=calendar, clock=clock, fixture_overrides=overrides)
+        # fixture_nonce=proof_run_id isolates this run's raw bytes (hence artifact
+        # SHA and object paths) so re-runs never collide and nothing is deleted.
+        adapter = MassiveAdapter(
+            calendar=calendar,
+            clock=clock,
+            fixture_overrides=overrides,
+            fixture_nonce=proof_run_id,
+        )
         return IngestionRunner(
             store=store, object_store=object_store, adapter=adapter, calendar=calendar
         )
@@ -128,13 +105,25 @@ def run(dsn: str, *, run_tag: str) -> dict:
             dataset_source="massive", sources=frozenset({"massive"}), passed=True
         ),
     )
-    restatements = store.governance_events(event_type=GovernanceEventType.RESTATEMENT_DETECTED)
-    refetch_audits = len(store.audit_events(action="identical_refetch"))
+    # Scope counts to THIS run (subject_id == this run's unique artifact SHA), so
+    # they are correct against a persistent, shared control plane that legitimately
+    # accumulates append-only rows across runs.
+    restatement_events = store.connection.execute(
+        "SELECT count(*) AS c FROM governance_events WHERE event_type = %s AND subject_id = %s",
+        (GovernanceEventType.RESTATEMENT_DETECTED.value, v2.sha256),
+    ).fetchone()["c"]
+    refetch_audits = store.connection.execute(
+        "SELECT count(*) AS c FROM audit_events WHERE action = 'identical_refetch'"
+        " AND subject_id = %s",
+        (v1.sha256,),
+    ).fetchone()["c"]
 
     return {
         "mode": "INFRA",
         "vendor": "fixture",
         "note": "Real infrastructure proof; vendor side is fixtures, not live Massive.",
+        "proof_run_id": proof_run_id,
+        "isolation": "non-destructive; run namespaced by proof_run_id; nothing truncated/deleted",
         "object_store": type(object_store).__name__,
         "control_plane": "postgres",
         "cohort": {
@@ -160,7 +149,7 @@ def run(dsn: str, *, run_tag: str) -> dict:
             "object_path": v2.object_path,
             "vintage": v2.vintage,
             "is_restatement": v2.is_restatement,
-            "restatement_events": len(restatements),
+            "restatement_events": restatement_events,
         },
         "original_vintage": {
             "retrievable": original_retrievable,
@@ -179,7 +168,7 @@ def run(dsn: str, *, run_tag: str) -> dict:
             and refetch_audits == 1,
             "changed_history_new_vintage": v2.is_restatement and v2.vintage == 2,
             "original_vintage_preserved": original_retrievable and v1.object_path != v2.object_path,
-            "restatement_recorded": len(restatements) == 1,
+            "restatement_recorded": restatement_events == 1,
             "single_source_cannot_be_sealed": (not seal_no_m4) and (not seal_massive_only),
         },
     }
@@ -189,13 +178,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="M0 real-infrastructure proof (fixture vendor).")
     parser.add_argument(
         "--admin-url",
-        default=os.environ.get("BACULUS_INFRA_ADMIN_URL"),
-        help="Postgres DSN for the real control plane (e.g. Supabase session pooler).",
+        default=os.environ.get("BACULUS_INFRA_ADMIN_URL") or os.environ.get("DATABASE_URL"),
+        help="Postgres DSN for the real control plane (read from env; never printed).",
     )
     parser.add_argument("--out", type=Path, default=None)
-    parser.add_argument("--run-tag", default="", help="Namespace the dataset to avoid collisions.")
     parser.add_argument(
-        "--reset", action="store_true", help="TRUNCATE baculus.* before running (dev DB only)."
+        "--proof-run-id",
+        default=None,
+        help="Isolation namespace for this run (default: a fresh random id). "
+        "Each run is isolated; nothing is ever truncated or deleted.",
     )
     parser.add_argument(
         "--apply-migrations",
@@ -206,18 +197,17 @@ def main() -> int:
 
     if not args.admin_url:
         print(
-            "REFUSING: no Postgres DSN. Pass --admin-url or set BACULUS_INFRA_ADMIN_URL "
-            "to the real Supabase Postgres connection string.",
+            "REFUSING: no Postgres DSN. Set DATABASE_URL / BACULUS_INFRA_ADMIN_URL in your "
+            "(uncommitted) .env, or pass --admin-url. The value is never printed.",
             file=sys.stderr,
         )
         return 2
 
+    proof_run_id = args.proof_run_id or uuid.uuid4().hex[:12]
     if args.apply_migrations:
         apply_migrations(args.admin_url)
-    if args.reset:
-        _reset(args.admin_url)
 
-    evidence = run(args.admin_url, run_tag=args.run_tag)
+    evidence = run(args.admin_url, proof_run_id=proof_run_id)
     text = json.dumps(evidence, indent=2, sort_keys=True)
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -229,7 +219,10 @@ def main() -> int:
     print("\n=== M0 INFRASTRUCTURE ACCEPTANCE ===", file=sys.stderr)
     for k, v in acceptance.items():
         print(f"  [{'PASS' if v else 'FAIL'}] {k}", file=sys.stderr)
-    print(f"object store: {evidence['object_store']}", file=sys.stderr)
+    print(
+        f"proof_run_id: {proof_run_id} | object store: {evidence['object_store']}",
+        file=sys.stderr,
+    )
     return 0 if all_pass else 1
 
 

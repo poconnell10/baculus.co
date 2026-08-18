@@ -48,6 +48,24 @@ def test_adapter_fetch_is_byte_deterministic(calendar, fixed_clock):
     assert a1.fetch_mode is FetchMode.FIXTURE
 
 
+def test_fixture_nonce_isolates_bytes_but_stays_deterministic(calendar, fixed_clock):
+    req = SourceRequest(
+        dataset="stocks/daily", symbols=("SPY",), start=date(2024, 1, 2), end=date(2024, 1, 5)
+    )
+
+    def fetch(nonce):
+        return MassiveAdapter(calendar=calendar, clock=fixed_clock, fixture_nonce=nonce).fetch(req)
+
+    # A nonce isolates runs (distinct bytes/sha)...
+    assert fetch("run-a").sha256 != fetch("run-b").sha256
+    # ...but is deterministic for a fixed nonce (same run reproduces identically).
+    assert fetch("run-a").sha256 == fetch("run-a").sha256
+    # Default (no nonce) leaves bytes unchanged from the plain fixture.
+    assert (
+        fetch(None).sha256 == MassiveAdapter(calendar=calendar, clock=fixed_clock).fetch(req).sha256
+    )
+
+
 def test_adapter_parses_to_canonical_bars_with_both_time_axes(calendar, fixed_clock):
     req = SourceRequest(
         dataset="stocks/daily", symbols=("SPY",), start=date(2024, 1, 2), end=date(2024, 1, 3)

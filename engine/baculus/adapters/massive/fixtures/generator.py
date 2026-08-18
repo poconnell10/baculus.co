@@ -70,12 +70,16 @@ def build_massive_payload(
     sessions: list[date],
     *,
     overrides: OverrideMap | None = None,
+    nonce: str | None = None,
 ) -> dict[str, object]:
     """Build a deterministic Massive-format payload dict.
 
     ``sessions`` is the list of trading sessions to emit (the caller derives
     these from the authoritative calendar). ``overrides`` may replace individual
-    OHLCV fields to simulate a vendor restatement.
+    OHLCV fields to simulate a vendor restatement. ``nonce`` (if given) is emitted
+    as ``request_id`` — a benign per-request field real vendors return — so that
+    otherwise-identical payloads can be isolated across proof runs. It never
+    alters bar data. Output is byte-deterministic for a fixed set of inputs.
     """
     overrides = overrides or {}
     results: list[dict[str, float | int | str]] = []
@@ -89,12 +93,15 @@ def build_massive_payload(
 
     # Sort deterministically for stable byte output.
     results.sort(key=lambda r: (str(r["T"]), int(r["t"])))
-    return {
+    doc: dict[str, object] = {
         "status": "OK",
         "adjusted": False,
         "resultsCount": len(results),
         "results": results,
     }
+    if nonce is not None:
+        doc["request_id"] = nonce
+    return doc
 
 
 __all__ = [

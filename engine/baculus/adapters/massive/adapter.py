@@ -47,6 +47,7 @@ class MassiveAdapter(MarketDataSourceAdapter):
         calendar: TradingCalendar | None = None,
         clock: Callable[[], datetime] | None = None,
         fixture_overrides: OverrideMap | None = None,
+        fixture_nonce: str | None = None,
         api_key_env: str = _ENV_API_KEY,
     ) -> None:
         self._mode = mode
@@ -54,6 +55,9 @@ class MassiveAdapter(MarketDataSourceAdapter):
         self._calendar = calendar or TradingCalendar("XNYS")
         self._clock = clock or (lambda: datetime.now(UTC))
         self._fixture_overrides = fixture_overrides or {}
+        # Optional per-run request id emitted into fixture bytes so otherwise
+        # identical proof runs can be isolated. FIXTURE mode only; never used live.
+        self._fixture_nonce = fixture_nonce
         self._api_key_env = api_key_env
 
     @property
@@ -70,7 +74,9 @@ class MassiveAdapter(MarketDataSourceAdapter):
     def _fetch_fixture(self, request: SourceRequest, retrieved_at: datetime) -> VendorArtifact:
         symbols = request.normalized_symbols()
         sessions = self._calendar.sessions_in_range(request.start, request.end)
-        payload_doc = build_massive_payload(symbols, sessions, overrides=self._fixture_overrides)
+        payload_doc = build_massive_payload(
+            symbols, sessions, overrides=self._fixture_overrides, nonce=self._fixture_nonce
+        )
         payload = to_canonical_bytes(payload_doc)
         results = payload_doc["results"]
         assert isinstance(results, list)
