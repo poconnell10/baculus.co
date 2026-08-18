@@ -7,6 +7,13 @@
 secrets/
 .secrets/
 
+# --- Supabase CLI local state (never commit) ---------------------------------
+# `supabase link` / CLI commands write local project state + a temp dir here.
+# It may contain project refs and must never be committed.
+supabase/.temp/
+supabase/.branches/
+.supabase/
+
 # --- Python -------------------------------------------------------------------
 __pycache__/
 *.py[cod]

@@ -46,9 +46,7 @@ class GovernanceStore:
         self._conn = psycopg.connect(dsn, autocommit=True, row_factory=dict_row)
         # Single enforcement schema; search_path pins it for every statement.
         # Use a quoted identifier (never string interpolation) for safety.
-        self._conn.execute(
-            sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema))
-        )
+        self._conn.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
 
     # -- lifecycle -----------------------------------------------------------
     @property

@@ -97,3 +97,29 @@ jobs:
 
       - name: Verify append-only + seal guard enforcement
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/ci/pg_smoke.sql
+
+  # OPTIONAL hosted-Supabase integration. This does NOT gate PRs and is disabled
+  # by default; the CRITICAL governance/append-only/decimal proofs live in the
+  # always-on `engine` and `migrations` jobs above (real Postgres). This job runs
+  # only when the repo owner opts in by setting the `RUN_SUPABASE_IT` repository
+  # variable to "true" AND providing the Supabase secrets. Secrets are never
+  # committed to this file — they come from GitHub encrypted secrets.
+  supabase-integration:
+    name: Hosted Supabase integration (optional)
+    runs-on: ubuntu-latest
+    if: ${{ vars.RUN_SUPABASE_IT == 'true' }}
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      BACULUS_STORAGE_BUCKET: ${{ vars.BACULUS_STORAGE_BUCKET || 'baculus-raw' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Hosted Supabase Storage integration tests
+        run: pytest engine/tests/integration -v
