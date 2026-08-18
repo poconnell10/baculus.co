@@ -116,13 +116,23 @@ class GovernanceStore:
             (logical_key_value,),
         ).fetchall()
 
-    def next_vintage(self, logical_key_value: str) -> int:
-        row = self._conn.execute(
-            "SELECT COALESCE(MAX(vintage), 0) AS m FROM raw_artifacts WHERE logical_key = %s",
-            (logical_key_value,),
-        ).fetchone()
-        assert row is not None
-        return int(row["m"]) + 1
+    def resolve_economic_vintage(
+        self, logical_key_value: str, logical_data_sha256: str
+    ) -> tuple[int, bool, dict[str, Any] | None]:
+        """Resolve the economic vintage for a logical-data hash under a key.
+
+        Returns ``(vintage, is_new_economic_content, matching_artifact_or_None)``:
+          * if a prior artifact already has this ``logical_data_sha256``, reuse
+            its vintage (this is a raw-only change, NOT a new economic vintage);
+          * otherwise allocate ``max(vintage)+1`` (a genuine new economic vintage,
+            i.e. a restatement when prior artifacts exist).
+        """
+        rows = self.artifacts_for_logical_key(logical_key_value)
+        for row in rows:
+            if row.get("logical_data_sha256") == logical_data_sha256:
+                return int(row["vintage"]), False, row
+        max_vintage = max((int(r["vintage"]) for r in rows), default=0)
+        return max_vintage + 1, True, None
 
     def insert_raw_artifact(
         self,
@@ -139,14 +149,15 @@ class GovernanceStore:
         row_count: int | None,
         schema_version: str,
         logical_key_value: str,
+        logical_data_sha256: str,
         vintage: int,
         fetch_mode: FetchMode,
     ) -> str:
         self._conn.execute(
             "INSERT INTO raw_artifacts(id, source_id, dataset, sha256, object_path, byte_size,"
             " content_type, file_extension, event_date_min, event_date_max, row_count,"
-            " schema_version, logical_key, vintage, fetch_mode)"
-            " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            " schema_version, logical_key, logical_data_sha256, vintage, fetch_mode)"
+            " VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (
                 sha256,
                 source_id,
@@ -161,6 +172,7 @@ class GovernanceStore:
                 row_count,
                 schema_version,
                 logical_key_value,
+                logical_data_sha256,
                 vintage,
                 fetch_mode.value,
             ),

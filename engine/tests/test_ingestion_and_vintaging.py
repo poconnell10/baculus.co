@@ -110,7 +110,48 @@ def test_restatement_raises_governance_event(make_runner, proof_request, store):
     assert GovernanceEventType.RESTATEMENT_DETECTED.value in result.governance_event_types
     events = store.governance_events(event_type=GovernanceEventType.RESTATEMENT_DETECTED)
     assert len(events) == 1
-    # The event preserves both the new and the prior observation identities.
     payload = events[0]["payload"]
     assert "new_sha256" in payload
-    assert "prior_sha256" in payload
+    assert "new_logical_data_sha256" in payload  # keyed on logical, not raw, identity
+    # The event identifies exactly which canonical observation changed.
+    assert payload["changed_observations"] == ["SPY:2024-01-02"]
+
+
+def test_changed_request_id_same_bars_is_not_a_restatement(make_runner, proof_request, store):
+    """Raw-only change (volatile metadata) must NOT be a restatement/new vintage.
+
+    Same market data, different vendor request id => different raw bytes but
+    identical logical data. This is the M0 provenance correction: restatement is
+    keyed on logical identity, not raw-byte inequality.
+    """
+    v1 = make_runner(nonce="request-A").ingest(proof_request)
+    # Same bars, DIFFERENT request id -> different raw SHA, identical logical data.
+    v2 = make_runner(nonce="request-B").ingest(proof_request)
+
+    assert v2.sha256 != v1.sha256  # raw bytes differ (volatile request id)
+    assert v2.logical_data_sha256 == v1.logical_data_sha256  # market data identical
+    assert v2.is_raw_only_change is True
+    assert v2.is_restatement is False
+    assert v2.vintage == v1.vintage == 1  # no new economic vintage
+    assert v2.dataset_build_id == v1.dataset_build_id  # existing PROVISIONAL build stands
+
+    # A second raw artifact is retained for exact provenance...
+    assert _raw_artifact_count(store) == 2
+    # ...recorded as an operational audit event, NOT a governance restatement.
+    assert GovernanceEventType.RESTATEMENT_DETECTED.value not in v2.governance_event_types
+    assert store.governance_events(event_type=GovernanceEventType.RESTATEMENT_DETECTED) == []
+    assert len(store.audit_events(action="raw_metadata_changed_same_logical")) == 1
+
+
+def test_changed_bar_with_different_request_id_is_still_a_restatement(
+    make_runner, proof_request, store
+):
+    """Changed historical bar (+ different request id) is a true restatement."""
+    make_runner(nonce="request-A").ingest(proof_request)
+    v2 = make_runner(overrides={("SPY", "2024-01-02"): {"v": 7_777_777}}, nonce="request-B").ingest(
+        proof_request
+    )
+    assert v2.is_restatement is True
+    assert v2.is_raw_only_change is False
+    assert v2.vintage == 2
+    assert len(store.governance_events(event_type=GovernanceEventType.RESTATEMENT_DETECTED)) == 1

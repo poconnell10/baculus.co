@@ -65,6 +65,21 @@ REQUIRED_BAR_FIELDS: tuple[str, ...] = (
 # Price/volume fields for OHLC integrity checks.
 OHLC_FIELDS: tuple[str, ...] = ("open", "high", "low", "close")
 
+# Economic (market-data) identity fields: the canonical observations that define
+# *what happened in the market*. Deliberately EXCLUDES observation_time and
+# source_artifact_id (per-observation provenance) and, of course, any vendor
+# request/transport metadata. Two artifacts with the same economic content over
+# these fields are the same logical market data even if their raw bytes differ.
+ECONOMIC_BAR_FIELDS: tuple[str, ...] = (
+    "symbol",
+    "event_date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CanonicalDailyBar:
@@ -103,6 +118,7 @@ class CanonicalDailyBar:
 
 __all__ = [
     "CANONICAL_BAR_SCHEMA",
+    "ECONOMIC_BAR_FIELDS",
     "OHLC_FIELDS",
     "PRICE_DECIMAL_PRECISION",
     "PRICE_DECIMAL_SCALE",

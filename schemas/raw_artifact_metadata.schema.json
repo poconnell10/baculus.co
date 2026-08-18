@@ -26,7 +26,15 @@
     "event_date_min": { "type": "string", "format": "date" },
     "event_date_max": { "type": "string", "format": "date" },
     "object_path": { "type": "string" },
-    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Raw artifact identity: SHA-256 of the exact vendor bytes."
+    },
+    "logical_data_sha256": {
+      "type": "string",
+      "description": "Logical market-data identity: hash of the canonical observations excluding volatile request/transport metadata. Drives economic vintaging/restatement. See ADR-0010."
+    },
     "byte_size": { "type": "integer", "minimum": 0 },
     "row_count": { "type": ["integer", "null"] },
     "ingestion_run_id": { "type": "string" },

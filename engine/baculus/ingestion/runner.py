@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import polars as pl
@@ -35,9 +36,10 @@ from baculus.governance.state_machine import (
 from baculus.governance.store import GovernanceStore, logical_key
 from baculus.lineage.anchor import AnchorLedger
 from baculus.lineage.canonical_json import sha256_hex, to_canonical_bytes
+from baculus.lineage.identity import changed_observations, logical_data_sha256
 from baculus.lineage.manifest import build_dataset_manifest, manifest_digest
-from baculus.models.bar import CANONICAL_BAR_SCHEMA
-from baculus.models.enums import DatasetState, FindingSeverity, GovernanceEventType
+from baculus.models.bar import CANONICAL_BAR_SCHEMA, CanonicalDailyBar
+from baculus.models.enums import DatasetState, FetchMode, FindingSeverity, GovernanceEventType
 from baculus.normalization.canonical import build_canonical_frame
 from baculus.reference.calendar import TradingCalendar
 from baculus.storage.object_store import ObjectStore
@@ -66,6 +68,10 @@ class IngestionResult:
     manifest_digest: str | None
     quarantined: bool
     validation_summary: dict[str, Any]
+    # True when raw bytes changed but the logical market data is unchanged: a new
+    # raw observation for provenance, NOT a restatement or a new economic vintage.
+    is_raw_only_change: bool = False
+    logical_data_sha256: str | None = None
     governance_event_types: list[str] = field(default_factory=list)
     findings: list[ValidationFinding] = field(default_factory=list)
 
@@ -230,7 +236,7 @@ class IngestionRunner:
             is_new_content=False,
             is_identical_refetch=True,
             is_restatement=False,
-            dataset_build_id=build["id"] if build is not None else None,
+            dataset_build_id=str(build["id"]) if build is not None else None,
             state=state,
             manifest_digest=build["manifest_digest"] if build is not None else None,
             quarantined=state is DatasetState.QUARANTINED,
@@ -247,50 +253,66 @@ class IngestionRunner:
         object_path: str,
         events: list[str],
     ) -> IngestionResult:
+        # Parse first: the ECONOMIC (logical) identity is derived from canonical
+        # bars, excluding volatile request/transport metadata. Restatement and
+        # economic vintaging key on logical identity, NOT on raw-byte inequality.
+        try:
+            bars = self._adapter.parse(artifact)
+        except MassiveParseError as exc:
+            unparseable = f"unparseable:{artifact.sha256}"
+            vintage, _, _ = self._store.resolve_economic_vintage(lkey, unparseable)
+            self._persist_raw(artifact, request, lkey, object_path, run_id, vintage, unparseable)
+            self._emit_raw_artifact_stored(
+                artifact, lkey, object_path, run_id, vintage, unparseable, events
+            )
+            build_id = self._store.create_dataset_build(
+                source_id=artifact.source,
+                dataset=request.dataset,
+                logical_key_value=lkey,
+                vintage=vintage,
+                state=DatasetState.RAW,
+            )
+            return self._quarantine_build(
+                request,
+                artifact,
+                lkey,
+                run_id,
+                build_id,
+                vintage,
+                object_path,
+                events,
+                False,
+                parse_error=exc,
+            )
+
+        logical_sha = logical_data_sha256(bars)
         prior_artifacts = self._store.artifacts_for_logical_key(lkey)
-        vintage = self._store.next_vintage(lkey)
-        self._store.insert_raw_artifact(
-            sha256=artifact.sha256,
-            source_id=artifact.source,
-            dataset=request.dataset,
-            object_path=object_path,
-            byte_size=artifact.byte_size,
-            content_type=artifact.content_type,
-            file_extension=artifact.file_extension,
-            event_date_min=artifact.event_date_min,
-            event_date_max=artifact.event_date_max,
-            row_count=artifact.row_count,
-            schema_version=CANONICAL_SCHEMA_VERSION,
-            logical_key_value=lkey,
-            vintage=vintage,
-            fetch_mode=artifact.fetch_mode,
+        vintage, is_new_economic, match_row = self._store.resolve_economic_vintage(
+            lkey, logical_sha
         )
-        self._store.insert_raw_observation(
-            run_id=run_id,
-            artifact_id=artifact.sha256,
-            source_id=artifact.source,
-            dataset=request.dataset,
-            logical_key_value=lkey,
-            observation_time=artifact.retrieved_at,
-            is_new_content=True,
-        )
+        self._persist_raw(artifact, request, lkey, object_path, run_id, vintage, logical_sha)
 
+        if not is_new_economic:
+            # Raw bytes changed but the logical market data is identical to an
+            # existing vintage: a new raw observation for provenance, NOT a
+            # restatement and NOT a new economic vintage. Provenance/audit only —
+            # no RAW_ARTIFACT_STORED governance event.
+            return self._handle_raw_only_change(
+                request,
+                artifact,
+                lkey,
+                run_id,
+                object_path,
+                events,
+                vintage,
+                match_row,
+                logical_sha,
+            )
+
+        self._emit_raw_artifact_stored(
+            artifact, lkey, object_path, run_id, vintage, logical_sha, events
+        )
         is_restatement = len(prior_artifacts) > 0
-        self._store.record_governance_event(
-            event_type=GovernanceEventType.RAW_ARTIFACT_STORED,
-            subject_type="raw_artifact",
-            subject_id=artifact.sha256,
-            run_id=run_id,
-            payload={
-                "logical_key": lkey,
-                "sha256": artifact.sha256,
-                "object_path": object_path,
-                "vintage": vintage,
-                "fetch_mode": artifact.fetch_mode.value,
-            },
-        )
-        events.append(GovernanceEventType.RAW_ARTIFACT_STORED.value)
-
         if is_restatement:
             self._store.record_governance_event(
                 event_type=GovernanceEventType.RESTATEMENT_DETECTED,
@@ -301,11 +323,10 @@ class IngestionRunner:
                 payload={
                     "logical_key": lkey,
                     "new_sha256": artifact.sha256,
-                    "prior_sha256": [row["sha256"] for row in prior_artifacts],
+                    "new_logical_data_sha256": logical_sha,
                     "new_vintage": vintage,
-                    "note": (
-                        "vendor redelivered changed historical content; prior vintage preserved"
-                    ),
+                    "changed_observations": self._diff_prior(prior_artifacts, bars),
+                    "note": "vendor redelivered CHANGED market data; prior vintage preserved",
                 },
             )
             self._store.record_governance_event(
@@ -326,24 +347,6 @@ class IngestionRunner:
             vintage=vintage,
             state=DatasetState.RAW,
         )
-
-        # Parse (vendor-specific). Malformed payload -> quarantine.
-        try:
-            bars = self._adapter.parse(artifact)
-        except MassiveParseError as exc:
-            return self._quarantine_build(
-                request,
-                artifact,
-                lkey,
-                run_id,
-                build_id,
-                vintage,
-                object_path,
-                events,
-                is_restatement,
-                parse_error=exc,
-            )
-
         df = build_canonical_frame(bars)
         report = self._validator.validate(
             df,
@@ -426,9 +429,162 @@ class IngestionRunner:
             manifest_digest=digest,
             quarantined=False,
             validation_summary=report.summary(),
+            logical_data_sha256=logical_sha,
             governance_event_types=events,
             findings=report.findings,
         )
+
+    def _persist_raw(
+        self,
+        artifact: VendorArtifact,
+        request: SourceRequest,
+        lkey: str,
+        object_path: str,
+        run_id: str,
+        vintage: int,
+        logical_sha: str,
+    ) -> None:
+        """Persist the raw artifact + observation (exact raw provenance) only.
+
+        Emits no governance event: the caller decides whether the storage is a
+        governance-worthy new-economic artifact or a provenance-only raw change.
+        """
+        self._store.insert_raw_artifact(
+            sha256=artifact.sha256,
+            source_id=artifact.source,
+            dataset=request.dataset,
+            object_path=object_path,
+            byte_size=artifact.byte_size,
+            content_type=artifact.content_type,
+            file_extension=artifact.file_extension,
+            event_date_min=artifact.event_date_min,
+            event_date_max=artifact.event_date_max,
+            row_count=artifact.row_count,
+            schema_version=CANONICAL_SCHEMA_VERSION,
+            logical_key_value=lkey,
+            logical_data_sha256=logical_sha,
+            vintage=vintage,
+            fetch_mode=artifact.fetch_mode,
+        )
+        self._store.insert_raw_observation(
+            run_id=run_id,
+            artifact_id=artifact.sha256,
+            source_id=artifact.source,
+            dataset=request.dataset,
+            logical_key_value=lkey,
+            observation_time=artifact.retrieved_at,
+            is_new_content=True,
+        )
+
+    def _emit_raw_artifact_stored(
+        self,
+        artifact: VendorArtifact,
+        lkey: str,
+        object_path: str,
+        run_id: str,
+        vintage: int,
+        logical_sha: str,
+        events: list[str],
+    ) -> None:
+        self._store.record_governance_event(
+            event_type=GovernanceEventType.RAW_ARTIFACT_STORED,
+            subject_type="raw_artifact",
+            subject_id=artifact.sha256,
+            run_id=run_id,
+            payload={
+                "logical_key": lkey,
+                "sha256": artifact.sha256,
+                "object_path": object_path,
+                "vintage": vintage,
+                "logical_data_sha256": logical_sha,
+                "fetch_mode": artifact.fetch_mode.value,
+            },
+        )
+        events.append(GovernanceEventType.RAW_ARTIFACT_STORED.value)
+
+    def _handle_raw_only_change(
+        self,
+        request: SourceRequest,
+        artifact: VendorArtifact,
+        lkey: str,
+        run_id: str,
+        object_path: str,
+        events: list[str],
+        vintage: int,
+        match_row: dict[str, Any] | None,
+        logical_sha: str,
+    ) -> IngestionResult:
+        """A new raw observation whose logical market data equals an existing
+        vintage: recorded as operational/audit provenance, never governance."""
+        self._store.record_audit_event(
+            actor="ingestion_runner",
+            action="raw_metadata_changed_same_logical",
+            subject_type="raw_artifact",
+            subject_id=artifact.sha256,
+            payload={
+                "logical_key": lkey,
+                "new_sha256": artifact.sha256,
+                "prior_sha256": match_row["sha256"] if match_row else None,
+                "logical_data_sha256": logical_sha,
+                "vintage": vintage,
+                "run_id": run_id,
+                "note": (
+                    "raw bytes changed (volatile metadata) but market data identical; "
+                    "new raw observation, not a restatement"
+                ),
+            },
+        )
+        build = self._store.get_dataset_build_by_key(lkey, vintage)
+        state = DatasetState(build["state"]) if build is not None else None
+        return IngestionResult(
+            run_id=run_id,
+            source=artifact.source,
+            dataset=request.dataset,
+            logical_key=lkey,
+            sha256=artifact.sha256,
+            object_path=object_path,
+            byte_size=artifact.byte_size,
+            row_count=artifact.row_count,
+            vintage=vintage,
+            is_new_content=True,
+            is_identical_refetch=False,
+            is_restatement=False,
+            dataset_build_id=str(build["id"]) if build is not None else None,
+            state=state,
+            manifest_digest=build["manifest_digest"] if build is not None else None,
+            quarantined=state is DatasetState.QUARANTINED,
+            validation_summary={"note": "raw-only change; logical data unchanged"},
+            is_raw_only_change=True,
+            logical_data_sha256=logical_sha,
+            governance_event_types=events,
+        )
+
+    def _diff_prior(
+        self, prior_artifacts: list[dict[str, Any]], current_bars: list[CanonicalDailyBar]
+    ) -> list[str]:
+        """Identify which canonical observations changed vs the latest prior
+        economic vintage (best-effort; empty if the prior cannot be re-read)."""
+        if not prior_artifacts:
+            return []
+        prior_row = max(prior_artifacts, key=lambda r: int(r["vintage"]))
+        try:
+            prior_bytes = self._object_store.get(prior_row["object_path"])
+            prior_artifact = VendorArtifact(
+                source=prior_row["source_id"],
+                dataset=prior_row["dataset"],
+                payload=prior_bytes,
+                content_type=prior_row["content_type"],
+                file_extension=prior_row["file_extension"],
+                fetch_mode=FetchMode(prior_row["fetch_mode"]),
+                retrieved_at=datetime(1970, 1, 1, tzinfo=UTC),
+                event_date_min=prior_row["event_date_min"],
+                event_date_max=prior_row["event_date_max"],
+                row_count=prior_row["row_count"],
+            )
+            prior_bars = self._adapter.parse(prior_artifact)
+        except (MassiveParseError, OSError, RuntimeError, ValueError, KeyError):
+            return []
+        return changed_observations(prior_bars, current_bars)
 
     def _quarantine_build(
         self,

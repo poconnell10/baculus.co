@@ -97,8 +97,13 @@ def proof_request() -> SourceRequest:
 def make_runner(store, object_store, calendar, fixed_clock):
     """Factory that builds a runner over a shared store/object_store."""
 
-    def _factory(overrides: OverrideMap | None = None) -> IngestionRunner:
-        adapter = MassiveAdapter(calendar=calendar, clock=fixed_clock, fixture_overrides=overrides)
+    def _factory(overrides: OverrideMap | None = None, nonce: str | None = None) -> IngestionRunner:
+        adapter = MassiveAdapter(
+            calendar=calendar,
+            clock=fixed_clock,
+            fixture_overrides=overrides,
+            fixture_nonce=nonce,
+        )
         return IngestionRunner(
             store=store,
             object_store=object_store,

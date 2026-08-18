@@ -75,14 +75,15 @@ def run(dsn: str, *, proof_run_id: str) -> dict:
     store = GovernanceStore(dsn, clock=clock)
     request = _cohort(proof_run_id)
 
-    def runner(overrides=None) -> IngestionRunner:
-        # fixture_nonce=proof_run_id isolates this run's raw bytes (hence artifact
-        # SHA and object paths) so re-runs never collide and nothing is deleted.
+    def runner(overrides=None, nonce=proof_run_id) -> IngestionRunner:
+        # fixture_nonce isolates this run's raw bytes (hence artifact SHA and
+        # object paths) so re-runs never collide and nothing is deleted. The
+        # nonce is volatile request metadata, EXCLUDED from logical-data hashing.
         adapter = MassiveAdapter(
             calendar=calendar,
             clock=clock,
             fixture_overrides=overrides,
-            fixture_nonce=proof_run_id,
+            fixture_nonce=nonce,
         )
         return IngestionRunner(
             store=store, object_store=object_store, adapter=adapter, calendar=calendar
@@ -92,6 +93,9 @@ def run(dsn: str, *, proof_run_id: str) -> dict:
     gov_before = len(store.governance_events())
     refetch = runner().ingest(request)
     gov_after = len(store.governance_events())
+    # Raw-only change: same bars, DIFFERENT request id (nonce) -> different raw
+    # bytes, identical logical data. Must NOT be a restatement/new vintage.
+    meta_only = runner(nonce=f"{proof_run_id}-alt").ingest(request)
     v2 = runner(overrides={("SPY", "2024-01-02"): {"v": 7_777_777}}).ingest(request)
 
     original_retrievable = object_store.exists(v1.object_path)
@@ -116,6 +120,15 @@ def run(dsn: str, *, proof_run_id: str) -> dict:
         "SELECT count(*) AS c FROM audit_events WHERE action = 'identical_refetch'"
         " AND subject_id = %s",
         (v1.sha256,),
+    ).fetchone()["c"]
+    meta_only_restatements = store.connection.execute(
+        "SELECT count(*) AS c FROM governance_events WHERE event_type = %s AND subject_id = %s",
+        (GovernanceEventType.RESTATEMENT_DETECTED.value, meta_only.sha256),
+    ).fetchone()["c"]
+    meta_only_audits = store.connection.execute(
+        "SELECT count(*) AS c FROM audit_events"
+        " WHERE action = 'raw_metadata_changed_same_logical' AND subject_id = %s",
+        (meta_only.sha256,),
     ).fetchone()["c"]
 
     return {
@@ -144,6 +157,15 @@ def run(dsn: str, *, proof_run_id: str) -> dict:
             "governance_events_added": gov_after - gov_before,
             "operational_audit_events": refetch_audits,
         },
+        "raw_only_change": {
+            "sha256": meta_only.sha256,
+            "is_raw_only_change": meta_only.is_raw_only_change,
+            "is_restatement": meta_only.is_restatement,
+            "vintage": meta_only.vintage,
+            "same_logical_data_as_v1": meta_only.logical_data_sha256 == v1.logical_data_sha256,
+            "restatement_events": meta_only_restatements,
+            "provenance_audit_events": meta_only_audits,
+        },
         "vintage_2_restatement": {
             "sha256": v2.sha256,
             "object_path": v2.object_path,
@@ -169,6 +191,14 @@ def run(dsn: str, *, proof_run_id: str) -> dict:
             "changed_history_new_vintage": v2.is_restatement and v2.vintage == 2,
             "original_vintage_preserved": original_retrievable and v1.object_path != v2.object_path,
             "restatement_recorded": restatement_events == 1,
+            "raw_only_change_not_restatement": (
+                meta_only.is_raw_only_change
+                and not meta_only.is_restatement
+                and meta_only.vintage == v1.vintage
+                and meta_only.logical_data_sha256 == v1.logical_data_sha256
+                and meta_only_restatements == 0
+                and meta_only_audits == 1
+            ),
             "single_source_cannot_be_sealed": (not seal_no_m4) and (not seal_massive_only),
         },
     }
