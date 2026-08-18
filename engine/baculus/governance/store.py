@@ -18,6 +18,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
@@ -44,7 +45,10 @@ class GovernanceStore:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._conn = psycopg.connect(dsn, autocommit=True, row_factory=dict_row)
         # Single enforcement schema; search_path pins it for every statement.
-        self._conn.execute(f"SET search_path TO {schema}, public")
+        # Use a quoted identifier (never string interpolation) for safety.
+        self._conn.execute(
+            sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema))
+        )
 
     # -- lifecycle -----------------------------------------------------------
     @property
