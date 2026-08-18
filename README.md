@@ -82,9 +82,19 @@ pytest
 # Generate end-to-end M0 evidence (fixtures; no vendor access needed)
 python scripts/prove_m0.py --out docs/evidence/m0_proof.json
 
-# Verify the LIVE stack (requires MASSIVE_API_KEY, optional Supabase env)
+# Real-infrastructure proof: fixture vendor -> REAL Supabase Storage + Postgres
+#   (set env + point --admin-url at the Supabase Postgres DSN)
+BACULUS_OBJECT_STORE=supabase python scripts/verify_infra.py \
+  --admin-url "$SUPABASE_DB_URL" --out docs/evidence/m0_infra_proof.json
+
+# Verify the LIVE vendor stack (requires MASSIVE_API_KEY, optional Supabase env)
 python scripts/verify_live.py --out docs/evidence/live_proof.json
 ```
+
+Proof drivers, by scope: `prove_m0.py` = local fixture proof (Postgres);
+`verify_infra.py` = real Supabase Storage + Postgres with fixture vendor (M0
+infrastructure closure); `verify_live.py` = live Massive (fails closed without a
+key). None presents fixture output as live-vendor proof.
 
 Configuration comes from environment variables; copy `.env.example` to `.env`.
 No secrets are ever committed or logged.
