@@ -87,14 +87,17 @@ python scripts/prove_m0.py --out docs/evidence/m0_proof.json
 BACULUS_OBJECT_STORE=supabase python scripts/verify_infra.py \
   --admin-url "$SUPABASE_DB_URL" --out docs/evidence/m0_infra_proof.json
 
-# Verify the LIVE vendor stack (requires MASSIVE_API_KEY, optional Supabase env)
-python scripts/verify_live.py --out docs/evidence/live_proof.json
+# Live Massive M0 proof: REAL vendor (AAPL, Jan 2020, adjusted) + real storage +
+#   real Postgres (requires MASSIVE_API_KEY; non-destructive, isolated per run)
+BACULUS_OBJECT_STORE=supabase python scripts/verify_massive.py \
+  --admin-url "$SUPABASE_DB_URL" --out docs/evidence/m0_massive_live_proof.json
 ```
 
 Proof drivers, by scope: `prove_m0.py` = local fixture proof (Postgres);
 `verify_infra.py` = real Supabase Storage + Postgres with fixture vendor (M0
-infrastructure closure); `verify_live.py` = live Massive (fails closed without a
-key). None presents fixture output as live-vendor proof.
+infrastructure closure); `verify_massive.py` = live Massive vendor proof (fails
+closed without a key; non-destructive, isolated per `proof_run_id`). None
+presents fixture output as live-vendor proof.
 
 Configuration comes from environment variables; copy `.env.example` to `.env`.
 No secrets are ever committed or logged.

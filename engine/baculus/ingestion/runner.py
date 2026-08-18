@@ -28,6 +28,7 @@ import polars as pl
 from baculus import CANONICAL_SCHEMA_VERSION
 from baculus.adapters.base import MarketDataSourceAdapter, SourceRequest, VendorArtifact
 from baculus.adapters.massive.normalize import MassiveParseError
+from baculus.adapters.massive.reasons import MassiveError
 from baculus.governance.state_machine import (
     ReconciliationEvidence,
     StateTransitionError,
@@ -258,7 +259,9 @@ class IngestionRunner:
         # economic vintaging key on logical identity, NOT on raw-byte inequality.
         try:
             bars = self._adapter.parse(artifact)
-        except MassiveParseError as exc:
+        except (MassiveParseError, MassiveError) as exc:
+            # A vendor/identity/integrity failure. Retain the raw evidence for
+            # provenance, then quarantine with the exact machine-readable reason.
             unparseable = f"unparseable:{artifact.sha256}"
             vintage, _, _ = self._store.resolve_economic_vintage(lkey, unparseable)
             self._persist_raw(artifact, request, lkey, object_path, run_id, vintage, unparseable)
@@ -282,7 +285,8 @@ class IngestionRunner:
                 object_path,
                 events,
                 False,
-                parse_error=exc,
+                parse_error=exc if isinstance(exc, MassiveParseError) else None,
+                massive_error=exc if isinstance(exc, MassiveError) else None,
             )
 
         logical_sha = logical_data_sha256(bars)
@@ -582,7 +586,7 @@ class IngestionRunner:
                 row_count=prior_row["row_count"],
             )
             prior_bars = self._adapter.parse(prior_artifact)
-        except (MassiveParseError, OSError, RuntimeError, ValueError, KeyError):
+        except (MassiveParseError, MassiveError, OSError, RuntimeError, ValueError, KeyError):
             return []
         return changed_observations(prior_bars, current_bars)
 
@@ -601,8 +605,35 @@ class IngestionRunner:
         report: ValidationReport | None = None,
         df: pl.DataFrame | None = None,
         parse_error: MassiveParseError | None = None,
+        massive_error: MassiveError | None = None,
     ) -> IngestionResult:
         findings: list[ValidationFinding] = list(report.findings) if report is not None else []
+        if massive_error is not None:
+            # A vendor/identity/integrity failure with an exact reason code.
+            vr_id = self._store.record_validation_run(
+                dataset_build_id=build_id,
+                artifact_id=artifact.sha256,
+                ruleset_version=RULESET_VERSION,
+                status="FAILED",
+                error_count=1,
+                warning_count=0,
+            )
+            self._store.record_validation_finding(
+                validation_run_id=vr_id,
+                rule_id=massive_error.reason.value,
+                rule_version="1.0.0",
+                severity=FindingSeverity.ERROR,
+                source=artifact.source,
+                artifact_id=artifact.sha256,
+                symbol=None,
+                event_date=None,
+                observed_value=(
+                    f"http_status={massive_error.http_status}"
+                    if massive_error.http_status
+                    else None
+                ),
+                reason=str(massive_error),
+            )
         if parse_error is not None:
             rule = RULES[RuleId.MALFORMED_RECORD]
             vr_id = self._store.record_validation_run(
@@ -639,10 +670,16 @@ class IngestionRunner:
                 )
 
         self._transition(build_id, DatasetState.RAW, DatasetState.QUARANTINED)
+        if massive_error is not None:
+            case_reason = massive_error.reason.value
+        elif parse_error is not None:
+            case_reason = "malformed payload"
+        else:
+            case_reason = "validation errors"
         case_id = self._store.open_quarantine_case(
             artifact_id=artifact.sha256,
             dataset=request.dataset,
-            reason="malformed payload" if parse_error is not None else "validation errors",
+            reason=case_reason,
         )
         self._store.record_governance_event(
             event_type=GovernanceEventType.QUARANTINE_OPENED,
@@ -653,7 +690,12 @@ class IngestionRunner:
             payload={"case_id": case_id, "artifact": artifact.sha256},
         )
         events.append(GovernanceEventType.QUARANTINE_OPENED.value)
-        summary = report.summary() if report is not None else {"malformed": True}
+        if report is not None:
+            summary: dict[str, Any] = report.summary()
+        elif massive_error is not None:
+            summary = {"quarantine_reason": massive_error.reason.value}
+        else:
+            summary = {"malformed": True}
         return IngestionResult(
             run_id=run_id,
             source=artifact.source,
