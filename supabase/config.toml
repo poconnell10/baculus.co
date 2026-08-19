@@ -1,0 +1,21 @@
+# Supabase CLI configuration (committed, non-secret).
+#
+# Purpose: make the Supabase CLI the authoritative migration mechanism for
+# PERSISTENT remote environments — `supabase db push`, tracked in the remote
+# `supabase_migrations.schema_migrations` table. See
+# docs/decisions/ADR-0011-migration-governance.md.
+#
+# This file intentionally contains NO project ref, credentials, secrets, access
+# tokens, or machine-specific values. The project ref is supplied by
+# `supabase link` and stored in the gitignored `supabase/.temp/`; secrets live
+# only in the uncommitted `.env`.
+#
+# NOTE: CLI acceptance of this minimal config must be validated on a linked
+# machine with `supabase db push --dry-run` before the first real push. `major_version`
+# mirrors the Postgres 16 used by the local/CI ephemeral proof and Supabase.
+
+# Local logical project name (NOT the Supabase project ref).
+project_id = "baculus"
+
+[db]
+major_version = 16
